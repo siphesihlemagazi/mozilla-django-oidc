@@ -11,7 +11,17 @@ from django.dispatch import receiver
 from django.http import HttpResponse
 from django.test import Client, RequestFactory, TestCase, override_settings
 from django.test.client import ClientHandler
-from django.urls import path
+
+try:
+    from django.urls import reverse
+except ImportError:
+    from django.core.urlresolvers import reverse
+
+try:
+    from django.urls import path
+except ImportError:
+    from django.conf.urls import url as path
+
 from mock import MagicMock, patch
 
 from mozilla_django_oidc.middleware import SessionRefresh

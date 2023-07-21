@@ -52,7 +52,10 @@ def is_authenticated(user):
 
     msg = "`is_authenticated()` is going to be removed in mozilla-django-oidc v 2.x"
     warnings.warn(msg, DeprecationWarning)
-    return user.is_authenticated
+    authenticated = user.is_authenticated
+    if callable(is_authenticated):
+        return authenticated()
+    return authenticated
 
 
 def base64_url_encode(bytes_like_obj):

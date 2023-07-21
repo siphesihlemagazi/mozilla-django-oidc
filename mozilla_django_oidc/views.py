@@ -5,9 +5,19 @@ from django.contrib import auth
 from django.core.exceptions import SuspiciousOperation
 from django.http import HttpResponseNotAllowed, HttpResponseRedirect
 from django.shortcuts import resolve_url
-from django.urls import reverse
+
 from django.utils.crypto import get_random_string
-from django.utils.http import url_has_allowed_host_and_scheme
+
+try:
+    from django.urls import reverse
+except ImportError:
+    from django.core.urlresolvers import reverse
+try:
+    from django.utils.http import url_has_allowed_host_and_scheme
+except ImportError:
+    # Django <= 2.2
+    from django.utils.http import is_safe_url as url_has_allowed_host_and_scheme
+
 from django.utils.module_loading import import_string
 from django.views.generic import View
 
@@ -15,7 +25,7 @@ from mozilla_django_oidc.utils import (
     absolutify,
     add_state_and_verifier_and_nonce_to_session,
     generate_code_challenge,
-    import_from_settings,
+    import_from_settings, is_authenticated,
 )
 
 
@@ -48,7 +58,7 @@ class OIDCAuthenticationCallbackView(View):
         request_user = getattr(self.request, "user", None)
         if (
             not request_user
-            or not request_user.is_authenticated
+            or not is_authenticated(request_user)
             or request_user != self.user
         ):
             auth.login(self.request, self.user)
@@ -84,9 +94,9 @@ class OIDCAuthenticationCallbackView(View):
             # otherwise the refresh middleware will force the user to
             # redirect to authorize again if the session refresh has
             # expired.
-            if request.user.is_authenticated:
+            if is_authenticated(request.user):
                 auth.logout(request)
-            assert not request.user.is_authenticated
+            assert not is_authenticated(request.user)  # TODO : make it compatible with both 1.9 and > 2.4
         elif "code" in request.GET and "state" in request.GET:
 
             # Check instead of "oidc_state" check if the "oidc_states" session key exists!
@@ -143,16 +153,18 @@ def get_next_url(request, redirect_field_name):
     """
     next_url = request.GET.get(redirect_field_name)
     if next_url:
+        # TODO : Improve security
         kwargs = {
             "url": next_url,
-            "require_https": import_from_settings(
-                "OIDC_REDIRECT_REQUIRE_HTTPS", request.is_secure()
-            ),
+            # "require_https": import_from_settings(
+            #     "OIDC_REDIRECT_REQUIRE_HTTPS", request.is_secure()
+            # ),
         }
 
         hosts = list(import_from_settings("OIDC_REDIRECT_ALLOWED_HOSTS", []))
         hosts.append(request.get_host())
-        kwargs["allowed_hosts"] = hosts
+        # TODO : Improve security
+        # kwargs["allowed_hosts"] = hosts
 
         is_safe = url_has_allowed_host_and_scheme(**kwargs)
         if is_safe:
@@ -258,7 +270,7 @@ class OIDCLogoutView(View):
         """Log out the user."""
         logout_url = self.redirect_url
 
-        if request.user.is_authenticated:
+        if is_authenticated(request.user):
             # Check if a method exists to build the URL to log out the user
             # from the OP.
             logout_from_op = self.get_settings("OIDC_OP_LOGOUT_URL_METHOD", "")

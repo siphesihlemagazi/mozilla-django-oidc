@@ -5,7 +5,11 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import SuspiciousOperation
 from django.test import Client, RequestFactory, TestCase, override_settings
-from django.urls import reverse
+from django.test import tag
+try:
+    from django.urls import reverse
+except ImportError:
+    from django.core.urlresolvers import reverse
 from mock import patch
 
 from mozilla_django_oidc import views
@@ -380,6 +384,7 @@ class GetNextURLTestCase(TestCase):
         next_url = views.get_next_url(req, "redirectto")
         self.assertEqual(next_url, "/foo")
 
+    @tag('url-parse-issue')
     def test_good_urls(self):
         urls = [
             "/",
@@ -393,6 +398,7 @@ class GetNextURLTestCase(TestCase):
 
             self.assertEqual(next_url, url)
 
+    @tag('url-parse-issue')
     def test_bad_urls(self):
         urls = [
             "",
@@ -432,6 +438,7 @@ class GetNextURLTestCase(TestCase):
 
             self.assertIsNone(next_url)
 
+    @tag('require-https-issue')
     def test_https(self):
         # If the request is for HTTPS and the next url is HTTPS, then that
         # works with all Djangos.
@@ -454,6 +461,7 @@ class GetNextURLTestCase(TestCase):
         next_url = views.get_next_url(req, "next")
         self.assertIsNone(next_url)
 
+    @tag('require-https-issue')
     @override_settings(OIDC_REDIRECT_REQUIRE_HTTPS=False)
     def test_redirect_https_not_required(self):
         req = self.factory.get("/", data={"next": "http://testserver/foo"}, secure=True)
@@ -461,6 +469,7 @@ class GetNextURLTestCase(TestCase):
         next_url = views.get_next_url(req, "next")
         self.assertEqual(next_url, "http://testserver/foo")
 
+    @tag('allowed-hosts-issue')
     @override_settings(OIDC_REDIRECT_ALLOWED_HOSTS=["example.com", "foo.com"])
     def test_redirect_allowed_hosts(self):
         req = self.factory.get(

@@ -7,7 +7,11 @@ import requests
 from django.contrib.auth import get_user_model
 from django.contrib.auth.backends import ModelBackend
 from django.core.exceptions import ImproperlyConfigured, SuspiciousOperation
-from django.urls import reverse
+try:
+    from django.urls import reverse
+except ImportError:
+    from django.core.urlresolvers import reverse
+
 from django.utils.encoding import force_bytes, smart_bytes, smart_str
 from django.utils.module_loading import import_string
 from josepy.b64 import b64decode

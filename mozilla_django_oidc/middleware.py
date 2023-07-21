@@ -1,13 +1,87 @@
+import asyncio
 import logging
 import time
 from re import Pattern as re_Pattern
+from typing import Mapping
 from urllib.parse import quote, urlencode
 
+from asgiref.sync import sync_to_async
 from django.contrib.auth import BACKEND_SESSION_KEY
 from django.http import HttpResponseRedirect, JsonResponse
-from django.urls import reverse
 from django.utils.crypto import get_random_string
-from django.utils.deprecation import MiddlewareMixin
+
+try:
+    from django.urls import reverse
+except ImportError:
+    from django.core.urlresolvers import reverse
+
+
+try:
+    from django.utils.deprecation import MiddlewareMixin
+except ImportError:
+
+    class MiddlewareMixin:
+        sync_capable = True
+        async_capable = True
+
+        def __init__(self, get_response):
+            if get_response is None:
+                raise ValueError("get_response must be provided.")
+            self.get_response = get_response
+            self._async_check()
+            super().__init__()
+
+        def __repr__(self):
+            return "<%s get_response=%s>" % (
+                self.__class__.__qualname__,
+                getattr(
+                    self.get_response,
+                    "__qualname__",
+                    self.get_response.__class__.__name__,
+                ),
+            )
+
+        def _async_check(self):
+            """
+            If get_response is a coroutine function, turns us into async mode so
+            a thread is not consumed during a whole request.
+            """
+            if asyncio.iscoroutinefunction(self.get_response):
+                # Mark the class as async-capable, but do the actual switch
+                # inside __call__ to avoid swapping out dunder methods
+                self._is_coroutine = asyncio.coroutines._is_coroutine
+
+        def __call__(self, request):
+            # Exit out to async mode, if needed
+            if asyncio.iscoroutinefunction(self.get_response):
+                return self.__acall__(request)
+            response = None
+            if hasattr(self, "process_request"):
+                response = self.process_request(request)
+            response = response or self.get_response(request)
+            if hasattr(self, "process_response"):
+                response = self.process_response(request, response)
+            return response
+
+        async def __acall__(self, request):
+            """
+            Async version of __call__ that is swapped in when an async request
+            is running.
+            """
+            response = None
+            if hasattr(self, "process_request"):
+                response = await sync_to_async(
+                    self.process_request,
+                    thread_sensitive=True,
+                )(request)
+            response = response or await self.get_response(request)
+            if hasattr(self, "process_response"):
+                response = await sync_to_async(
+                    self.process_response,
+                    thread_sensitive=True,
+                )(request, response)
+            return response
+
 from django.utils.functional import cached_property
 from django.utils.module_loading import import_string
 
@@ -15,10 +89,90 @@ from mozilla_django_oidc.auth import OIDCAuthenticationBackend
 from mozilla_django_oidc.utils import (
     absolutify,
     add_state_and_verifier_and_nonce_to_session,
-    import_from_settings,
+    import_from_settings, is_authenticated,
 )
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _destruct_iterable_mapping_values(data):
+    for i, elem in enumerate(data):
+        if len(elem) != 2:
+            raise ValueError(
+                'dictionary update sequence element #{} has '
+                'length {}; 2 is required.'.format(i, len(elem))
+            )
+        if not isinstance(elem[0], str):
+            raise ValueError('Element key %r invalid, only strings are allowed' % elem[0])
+        yield tuple(elem)
+
+
+class CaseInsensitiveMapping(Mapping):
+    """
+    Mapping allowing case-insensitive key lookups. Original case of keys is
+    preserved for iteration and string representation.
+
+    Example::
+
+        >>> ci_map = CaseInsensitiveMapping({'name': 'Jane'})
+        >>> ci_map['Name']
+        Jane
+        >>> ci_map['NAME']
+        Jane
+        >>> ci_map['name']
+        Jane
+        >>> ci_map  # original case preserved
+        {'name': 'Jane'}
+    """
+
+    def __init__(self, data):
+        if not isinstance(data, Mapping):
+            data = {k: v for k, v in _destruct_iterable_mapping_values(data)}
+        self._store = {k.lower(): (k, v) for k, v in data.items()}
+
+    def __getitem__(self, key):
+        return self._store[key.lower()][1]
+
+    def __len__(self):
+        return len(self._store)
+
+    def __eq__(self, other):
+        return isinstance(other, Mapping) and {
+            k.lower(): v for k, v in self.items()
+        } == {
+            k.lower(): v for k, v in other.items()
+        }
+
+    def __iter__(self):
+        return (original_key for original_key, value in self._store.values())
+
+    def __repr__(self):
+        return repr({key: value for key, value in self._store.values()})
+
+    def copy(self):
+        return self
+
+
+class HttpHeaders(CaseInsensitiveMapping):
+    HTTP_PREFIX = 'HTTP_'
+    # PEP 333 gives two headers which aren't prepended with HTTP_.
+    UNPREFIXED_HEADERS = {'CONTENT_TYPE', 'CONTENT_LENGTH'}
+
+    def __init__(self, environ):
+        headers = {}
+        for header, value in environ.items():
+            name = self.parse_header_name(header)
+            if name:
+                headers[name] = value
+        super().__init__(headers)
+
+    @classmethod
+    def parse_header_name(cls, header):
+        if header.startswith(cls.HTTP_PREFIX):
+            header = header[len(cls.HTTP_PREFIX):]
+        elif header not in cls.UNPREFIXED_HEADERS:
+            return None
+        return header.replace('_', '-').title()
 
 
 class SessionRefresh(MiddlewareMixin):
@@ -109,7 +263,7 @@ class SessionRefresh(MiddlewareMixin):
 
         return (
             request.method == "GET"
-            and request.user.is_authenticated
+            and is_authenticated(request.user)
             and is_oidc_enabled
             and request.path not in self.exempt_urls
             and not any(pat.match(request.path) for pat in self.exempt_url_patterns)
@@ -158,6 +312,10 @@ class SessionRefresh(MiddlewareMixin):
 
         query = urlencode(params, quote_via=quote)
         redirect_url = "{url}?{query}".format(url=auth_url, query=query)
+
+        if not getattr(request, "headers", None):
+            request.headers = HttpHeaders(request.META)
+
         if request.headers.get("x-requested-with") == "XMLHttpRequest":
             # Almost all XHR request handling in client-side code struggles
             # with redirects since redirecting to a page where the user

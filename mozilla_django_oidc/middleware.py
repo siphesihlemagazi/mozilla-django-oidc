@@ -1,7 +1,9 @@
 import asyncio
 import logging
 import time
-from re import Pattern as re_Pattern
+# from re import Pattern as re_Pattern
+# Python 3.6
+import re
 from typing import Mapping
 from urllib.parse import quote, urlencode
 
@@ -216,7 +218,17 @@ class SessionRefresh(MiddlewareMixin):
         """
         exempt_urls = []
         for url in self.OIDC_EXEMPT_URLS:
-            if not isinstance(url, re_Pattern):
+
+            # Python 3.8
+            # if not isinstance(url, re_Pattern):
+            #     exempt_urls.append(url)
+
+            # Python 3.6
+            if not isinstance(url, str):
+                url_pattern = re.compile(url)
+                exempt_urls.append(url_pattern)
+
+            else:
                 exempt_urls.append(url)
         exempt_urls.extend(
             [
@@ -242,8 +254,16 @@ class SessionRefresh(MiddlewareMixin):
         """
         exempt_patterns = set()
         for url_pattern in self.OIDC_EXEMPT_URLS:
-            if isinstance(url_pattern, re_Pattern):
+
+            # Python 3.8
+            # if isinstance(url_pattern, re_Pattern):
+            #     exempt_patterns.add(url_pattern)
+
+            # Python 3.6
+            if not isinstance(url_pattern, str):
+                url_pattern = re.compile(url_pattern)
                 exempt_patterns.add(url_pattern)
+
         return exempt_patterns
 
     def is_refreshable_url(self, request):

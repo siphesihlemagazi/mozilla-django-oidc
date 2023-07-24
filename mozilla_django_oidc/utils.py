@@ -53,7 +53,7 @@ def is_authenticated(user):
     msg = "`is_authenticated()` is going to be removed in mozilla-django-oidc v 2.x"
     warnings.warn(msg, DeprecationWarning)
     authenticated = user.is_authenticated
-    if callable(is_authenticated):
+    if callable(authenticated):
         return authenticated()
     return authenticated
 
